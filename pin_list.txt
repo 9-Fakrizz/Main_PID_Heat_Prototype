@@ -1,0 +1,48 @@
+# List of Pins
+
+### **Power**
+
+* **3.3V** → External 3.3V devices
+* **5VDC+** → 5V supply (from USB or external regulator)
+* **5VDC-** → GND
+
+---
+
+### **Left Side Pins**
+
+* **GPIO 36 (VP)** → PT3
+* **GPIO 39 (VN)** → B3
+* **GPIO 34** → B1
+* **GPIO 35** → B2
+* **GPIO 32** → buzzer
+* **GPIO 33** → SCK
+* **GPIO 25** → SO
+* **GPIO 26** → relay3
+
+---
+
+### **Right Side Pins**
+
+* **GPIO 22** → SCL
+* **GPIO 21** → SDA
+* **GPIO 19** → CS1
+* **GPIO 18** → CS2
+* **GPIO 5** → CS3
+* **GPIO 17** → PT1
+* **GPIO 16** → PT2
+* **GPIO 4** → CS4
+* **GPIO 2** → relay1
+* **GPIO 15** → relay2
+
+---
+
+# List of Components
+
+* Relay 3 Unit
+* OLED I2C 1 Unit
+* Button 3 Unit
+* Potentiometer (Knob) 1 Unit
+* Thermocouple (MAX6675) 1 Unit
+* IR Temperature I2C 2 Unit
+* Buzzer 1 Unit
+* Raw Analog for Heat coil 1 Unit
