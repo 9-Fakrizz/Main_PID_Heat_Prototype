@@ -8,21 +8,16 @@
 
 ---
 
-### **Left Side Pins**
+### **Pins**
 
 * **GPIO 36 (VP)** → PT3
 * **GPIO 39 (VN)** → B3
 * **GPIO 34** → B1
 * **GPIO 35** → B2
 * **GPIO 32** → buzzer
-* **GPIO 33** → SCK
+* **GPIO 33** → SCK 
 * **GPIO 25** → SO
 * **GPIO 26** → relay3
-
----
-
-### **Right Side Pins**
-
 * **GPIO 22** → SCL
 * **GPIO 21** → SDA
 * **GPIO 19** → CS1
