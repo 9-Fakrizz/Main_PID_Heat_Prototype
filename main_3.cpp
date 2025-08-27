@@ -3,9 +3,6 @@
 #include <Adafruit_SSD1306.h>
 #include <MAX6675.h>
 #include <EEPROM.h>
-#include <esp_log.h> 
-
-static const char *TAG = "MAIN";
 
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
@@ -25,14 +22,10 @@ const int button3_pin = 33; // Select
 const int encoderPin = 32;  // Analog input for rotary encoder simulation (placeholder)
 
 const int heaterRelayPin = 2;
-const int heaterRelayPin2 = 15;
-const int heaterRelayPin3 = 13;
 
 const int buzzerPin = 27;  
 int adcValue = 0;
 bool relayState;
-bool relayState2;
-bool relayState3;
 
 unsigned long lastInteractionTime = 0;
 const unsigned long standbyTimeout = 10000;
@@ -55,8 +48,7 @@ enum MenuState {
   MENU_UNIT,
   MENU_ABOUT,
   MENU_SET_CUSTOM_TEMP,
-  MENU_MANUAL_TEST,
-  RELAY_TEST
+  MENU_MANUAL_TEST       // <--- Added new manual test menu
 };
 
 MenuState currentState = MENU_STANDBY;
@@ -79,7 +71,6 @@ void selectMenuOption() {
       } else if (menuIndex == 7) {
         currentState = MENU_MANUAL_TEST;
       }
-      ESP_LOGI(TAG,"Current State : %s ",MenuStateToStr(currentState) );
       subMenuIndex = 0;
       break;
 
@@ -121,6 +112,8 @@ void selectMenuOption() {
     case MENU_MANUAL_TEST:
       switch (subMenuIndex) {
         case 0: // Relay
+          relayState = !relayState;
+          digitalWrite(heaterRelayPin, relayState);
           break;
         case 1: // Buzzer
           tone(buzzerPin, 1000, 200); // 1kHz beep for 200ms
@@ -131,30 +124,12 @@ void selectMenuOption() {
           break;
       }
       break;
-    
-    case RELAY_TEST:
-      switch (subMenuIndex) {
-        case 0: // Relay
-          relayState = !relayState;
-          digitalWrite(heaterRelayPin, relayState);
-          break;
-        case 1: // Relay 2
-          relayState2 = !relayState2;
-          digitalWrite(heaterRelayPin2, relayState2);
-          break;
-        case 2: // Relay 3
-          relayState3 = !relayState3;
-          digitalWrite(heaterRelayPin3, relayState3);
-          break;
-      }
-      break;
 
     default:
       currentState = MENU_MAIN;
       break;
   }
 }
-
 
 void handleInput() {
   if (millis() - lastButtonPress < buttonDelay) return;
@@ -185,7 +160,7 @@ void handleInput() {
 
     // Short press behavior
     if (currentState == MENU_MAIN) {
-      menuIndex = (menuIndex - 1 + 8) % 8;
+      menuIndex = (menuIndex - 1 + 7) % 7;
     } else {
       subMenuIndex--;
     }
@@ -195,7 +170,7 @@ void handleInput() {
 
   if (digitalRead(button2_pin) == LOW) {
     if (currentState == MENU_MAIN) {
-      menuIndex = (menuIndex + 1) % 8;
+      menuIndex = (menuIndex + 1) % 7;
     } else {
       subMenuIndex++;
     }
@@ -205,13 +180,27 @@ void handleInput() {
 
   if (digitalRead(button3_pin) == LOW) {
     ESP_LOGI(TAG,"(handle_input)Current State : %s ",MenuStateToStr(currentState) );
-    if (currentState == MENU_MANUAL_TEST && subMenuIndex == 0) {
-      subMenuIndex = 0; 
-      currentState = RELAY_TEST;
-    }
     selectMenuOption();
     lastInteractionTime = millis();
     lastButtonPress = millis();
+  }
+}
+
+void readTemperature() {
+  float currentTemp = thermoCouple.readCelsius();
+  if (!tempUnitIsCelsius) {
+    currentTemp = currentTemp * 9.0 / 5.0 + 32.0;
+  }
+}
+
+void controlHeater() {
+  float compareTemp = tempUnitIsCelsius ? customStartTemp : (customStartTemp * 9.0 / 5.0 + 32.0);
+  float maxTemp     = tempUnitIsCelsius ? maxTempLock : (maxTempLock * 9.0 / 5.0 + 32.0);
+
+  if (currentTemp < compareTemp) {
+    digitalWrite(heaterRelayPin, HIGH);
+  } else if (currentTemp >= maxTemp) {
+    digitalWrite(heaterRelayPin, LOW);
   }
 }
 
@@ -300,10 +289,6 @@ void updateDisplay() {
             display.println(adcValue);
         }
         break;
-    case RELAY_TEST:
-        display.println(subMenuIndex == 0 ? "> Relay 1"  : "  Relay 1");
-        display.println(subMenuIndex == 1 ? "> Relay 2"  : "  Relay 2");
-        display.println(subMenuIndex == 2 ? "> Relay 3"  : "  Relay 3");
 
   }
   display.display();
@@ -324,10 +309,6 @@ void setup() {
 
   pinMode(heaterRelayPin, OUTPUT);
   digitalWrite(heaterRelayPin, LOW);
-  pinMode(heaterRelayPin2, OUTPUT);
-  digitalWrite(heaterRelayPin2, LOW);
-  pinMode(heaterRelayPin3, OUTPUT);
-  digitalWrite(heaterRelayPin3, LOW);
 
   if (!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
     Serial.println(F("SSD1306 allocation failed"));
@@ -340,12 +321,15 @@ void setup() {
   pinMode(button1_pin, INPUT);
   pinMode(button2_pin, INPUT);
   pinMode(button3_pin, INPUT);
+
   pinMode(buzzerPin, OUTPUT);
   digitalWrite(buzzerPin, LOW);
 }
 
 void loop() {
   handleInput();
+  readTemperature();
+  controlHeater();
   updateDisplay();
-  //checkStandby();
+  checkStandby();
 }
