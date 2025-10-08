@@ -10,24 +10,24 @@
 
 ### **Pins**
 
-* **GPIO 36 (VP)** → PT3
-* **GPIO 39 (VN)** → B3
-* **GPIO 34** → B1
-* **GPIO 35** → B2
-* **GPIO 32** → buzzer
-* **GPIO 33** → SCK 
-* **GPIO 25** → SO
+* **GPIO 32** → PT3
+* **GPIO 33** → B3
+* **GPIO 25** → B1
+* **GPIO 26** → B2
+* **GPIO 27** → buzzer
+* **GPIO 14** → SCK 
+* **GPIO 12** → SO **(upload issue)
 * **GPIO 13** → relay3
 * **GPIO 22** → SCL
 * **GPIO 21** → SDA
-* **GPIO 19** → CS1
+* **GPIO 19** → CS1 (thermocouple1)
 * **GPIO 18** → CS2
 * **GPIO 5** → CS3
 * **GPIO 17** → PT1
-* **GPIO 16** → PT2
+* **GPIO 15** → PT2
 * **GPIO 4** → CS4
-* **GPIO 2** → relay1
-* **GPIO 15** → relay2
+* **GPIO 2** → relay1 **(upload issue)
+* **GPIO 15** → relay2 **(upload issue)
 
 ---
 
@@ -41,3 +41,13 @@
 * IR Temperature I2C 2 Unit
 * Buzzer 1 Unit
 * Raw Analog for Heat coil 1 Unit
+
+# Critical ESP32 Boot Pins
+
+* The ESP32 has certain strapping pins that decide the boot mode.
+If they are pulled HIGH/LOW incorrectly, the board won’t enter the USB programming mode:
+
+* GPIO0, Must be HIGH for normal boot (LOW = flash mode)
+* GPIO2, Must be LOW at boot, otherwise boot fails
+* GPIO15, Must be LOW at boot
+* GPIO12, Controls flash voltage, if pulled HIGH the ESP may not boot
