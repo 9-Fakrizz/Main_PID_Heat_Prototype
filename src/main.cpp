@@ -41,11 +41,14 @@ Adafruit_MLX90614 irSensor = Adafruit_MLX90614();
 #define SSR1_PIN  13
 #define SSR2_PIN  4
 
+#define BUZZ_FREQ 2000   // Hz
+
 // ===== Objects =====
 Adafruit_MAX31855 tc1(MAXCLK, MAXCS1, MAXDO);
 Adafruit_MAX31855 tc2(MAXCLK, MAXCS2, MAXDO);
 
 // ===== PID vars =====
+bool start_pid = false;
 double temp1_raw, temp2_raw;
 double temp1_filt = 25, temp2_filt = 25;
 double out1, out2;
@@ -75,7 +78,7 @@ const double tau = 2.0;
 unsigned long lastFilterUpdate = 0;
 
 // ===== Heating bias =====
-const double heatBias = 25.0; // °C
+const double heatBias = 10.0; // °C
 
 // ===== Serial =====
 char cmd[24];
@@ -98,6 +101,17 @@ const unsigned long standbyTimeout = 10000;
 
 float targetTemp1 = 0;
 float targetTemp2 = 0;
+float maxTempLock1 = 537;
+float maxTempLock2 = 537;
+
+int idleTimeoutOption = 0; // 0=15m, 1=30m, 2=60m, 3=Always On
+int idle_timeout_arr[3] = {10, 15, 30};
+int idle_timeout = 10;
+bool idle_always = false;
+bool lightOn = false;
+bool soundOn = true;
+int irAlarm1 = 300;
+int irAlarm2 = 300;
 
 float currentTemp1 = 0;
 float currentTemp2 = 0;
@@ -130,18 +144,6 @@ enum MenuState {
 
 MenuState currentState = MENU_STANDBY;
 
-float startTemps[] = {0, 260, 287, 315, 343, 371, 398, 426};
-float customStartTemp = 0;
-float maxTempLock = 537;
-int idleTimeoutOption = 0; // 0=15m, 1=30m, 2=60m, 3=Always On
-int idle_timeout_arr[3] = {10, 15, 30};
-int idle_timeout = 10;
-bool idle_always = false;
-bool lightOn = false;
-bool soundOn = true;
-int irAlarm1 = 0;
-int irAlarm2 = 0;
-
 void buzzerOn(){
   if(soundOn){
     digitalWrite(buzzerPin, HIGH);
@@ -152,6 +154,10 @@ void buzzerOn(){
 
 void checkUnit() {
   if (!tempUnitIsCelsius) { // convert to Fahrenheit
+    targetTemp1  = targetTemp1  * 9.0 / 5.0 + 32.0;
+    targetTemp2  = targetTemp2  * 9.0 / 5.0 + 32.0;
+    maxTempLock1 = maxTempLock1 * 9.0 / 5.0 + 32.0;
+    maxTempLock2 = maxTempLock2 * 9.0 / 5.0 + 32.0;
     currentTemp1 = currentTemp1 * 9.0 / 5.0 + 32.0;
     currentTemp2 = currentTemp2 * 9.0 / 5.0 + 32.0;
     currentTemp3 = currentTemp3 * 9.0 / 5.0 + 32.0;
@@ -174,20 +180,12 @@ void selectMenuOption() {
       break;
 
     case MENU_START_TEMP:
-      if (subMenuIndex < 8) {
-        customStartTemp = startTemps[subMenuIndex];
-      } else {
-        currentState = MENU_SET_CUSTOM_TEMP;
-        customStartTemp = 0;
-      }
       break;
 
     case MENU_SET_CUSTOM_TEMP:
-      if (customStartTemp < 537) customStartTemp++;
       break;
 
     case MENU_MAX_TEMP:
-      if (subMenuIndex < 537) maxTempLock = subMenuIndex;
       break;
 
     case MENU_UNIT:
@@ -214,6 +212,8 @@ void selectMenuOption() {
         case 2: // 30min
           break;
         case 3: // always on
+          break;
+        case 4: // confirm
           break;
       }
       break;
@@ -263,6 +263,36 @@ void selectMenuOption() {
   }
 }
 
+void soundButton()
+{
+  tone(buzzerPin, BUZZ_FREQ, 40);  // 40 ms
+}
+
+void soundConfirm()
+{
+    tone(buzzerPin, BUZZ_FREQ, 80);
+    delay(100);
+    tone(buzzerPin, BUZZ_FREQ, 80);
+}
+
+void soundAlarm()
+{
+    static unsigned long lastToggle = 0;
+    static bool state = false;
+
+    if (millis() - lastToggle >= 300) {
+        lastToggle = millis();
+        state = !state;
+
+        if (state)
+            tone(buzzerPin, 1500);
+        else
+            noTone(buzzerPin);
+    }
+}
+
+
+
 
 void handleInput() {
   if (millis() - lastButtonPress < buttonDelay) return;
@@ -305,6 +335,12 @@ void handleInput() {
     } else if(currentState == MENU_MANUAL_TEST) {
       subMenuIndex = (subMenuIndex-1+4)%4;
     }
+    else if(currentState == MENU_START_TEMP) {
+      subMenuIndex = (subMenuIndex-1+3)%3;
+    }
+    else if(currentState == MENU_MAX_TEMP) {
+      subMenuIndex = (subMenuIndex-1+3)%3;
+    }
     else if(currentState == MENU_LIGHT_SOUND) {
       subMenuIndex = (subMenuIndex-1+3)%3;
     }
@@ -330,6 +366,12 @@ void handleInput() {
       menuIndex = (menuIndex + 1) % 8;
     } else if(currentState == MENU_MANUAL_TEST){
       subMenuIndex = (subMenuIndex+1)%4;
+    }
+    else if(currentState == MENU_START_TEMP){
+      subMenuIndex = (subMenuIndex+1)%3;
+    }
+    else if(currentState == MENU_MAX_TEMP){
+      subMenuIndex = (subMenuIndex+1)%3;
     }
     else if(currentState == MENU_LIGHT_SOUND) {
       subMenuIndex = (subMenuIndex+1)%3;
@@ -369,6 +411,32 @@ void handleInput() {
       }
     }
 
+    if(currentState == MENU_START_TEMP){
+      if(subMenuIndex == 2){
+        currentState = MENU_STANDBY;
+        Serial.println("START PID");
+        display.clearDisplay();
+        display.setTextSize(1);
+        display.setCursor(30, 15);
+        display.print("PID START !");
+        display.display();
+
+        setpoint1 = targetTemp1;
+        setpoint2 = targetTemp2;
+        start_pid = true;
+        delay(1000);
+        return;
+      }
+    }
+
+    // menu max temp
+    if(currentState == MENU_MAX_TEMP){
+      if(subMenuIndex == 2){
+        currentState = MENU_MAIN;
+        Serial.println("confirm max temp");
+        return;
+      }
+    }
     // idle off
     if(currentState == MENU_IDLE_OFF){
       if(subMenuIndex == 0){
@@ -567,20 +635,43 @@ void updateDisplay() {
       display.println(menuIndex == 7 ? "> Manual Test" : "  Manual Test"); // <--- added here
       break;
     case MENU_START_TEMP:
-      for (int i = 0; i < 8; i++) {
-        display.println(subMenuIndex == i ? "> " + String((int)startTemps[i]) + " C" : "  " + String((int)startTemps[i]) + " C");
+      lastInteractionTime = millis();
+      display.print(subMenuIndex == 0 ? "> Target 1: " : "  Target 1: ");
+      display.print(targetTemp1, 1);
+      display.println("C");
+      if (subMenuIndex == 0) {
+          adcValue = analogRead(encoderPin);
+          targetTemp1 = map(adcValue, 0, 4095, 0, maxTempLock1);
       }
-      display.println(subMenuIndex == 8 ? "> CUSTOM" : "  CUSTOM");
+      display.print(subMenuIndex == 1 ? "> Target 2: " : "  Target 2: ");
+      display.print(targetTemp2, 1);
+      display.println("C");
+      if (subMenuIndex == 1) {
+          adcValue = analogRead(encoderPin);
+          targetTemp2 = map(adcValue, 0, 4095, 0, maxTempLock2);
+      }
+      display.println(subMenuIndex == 2 ? "> START PID" : "  START PID");
       break;
     case MENU_SET_CUSTOM_TEMP:
-      display.setCursor(0, 10);
-      display.print("Custom Temp: ");
-      display.print(customStartTemp);
-      display.println(" C");
       break;
     case MENU_MAX_TEMP:
-      display.print("Max Temp Lock: ");
-      display.println(maxTempLock);
+      // lastButtonPress = millis();
+      lastInteractionTime = millis();
+      display.print(subMenuIndex == 0 ? "> MaxLock1: " : "  MaxLock1: ");
+      display.print(maxTempLock1, 1);
+      display.println("C");
+      if (subMenuIndex == 0) {
+          adcValue = analogRead(encoderPin);
+          maxTempLock1 = map(adcValue, 0, 4095, 0, 600);
+      }
+      display.print(subMenuIndex == 1 ? "> MaxLock2: " : "  MaxLock2: ");
+      display.print(maxTempLock2, 1);
+      display.println("C");
+      if (subMenuIndex == 1) {
+          adcValue = analogRead(encoderPin);
+          maxTempLock2 = map(adcValue, 0, 4095, 0, 600);
+      }
+      display.println(subMenuIndex == 2 ? "> Confirm" : "  Confirm");
       break;
     case MENU_UNIT:
       display.println("Temperature Unit");
@@ -663,8 +754,10 @@ void checkStandby() {
       subMenuIndex = 0;
     }
   }
+  if(millis() - lastInteractionTime > (idle_timeout*10000) && !idle_always){
+    ESP.restart();
+  }
 }
-
 // ===== Functions =====
 
 void readAndFilterTemps() {
@@ -733,6 +826,63 @@ void readSensor()
     // if (!isnan(irAmb)) irTemp2 = irAmb;
 }
 
+void checkAlarm(){
+  if(currentTemp1 >= irAlarm1){
+    soundAlarm();
+  }
+  else{
+    noTone(buzzerPin);
+  }
+}
+
+void soundEffect(){
+  if(soundOn){
+    if(digitalRead(button1_pin) == LOW || digitalRead(button2_pin) == LOW) soundButton() ;
+    else if(digitalRead(button3_pin) == LOW) soundConfirm();
+  }else{
+    noTone(buzzerPin);
+  }
+}
+
+
+void startPID(){
+  pid1.SetOutputLimits(0, windowSize);
+  pid2.SetOutputLimits(0, windowSize);
+  pid1.SetMode(AUTOMATIC);
+  pid2.SetMode(AUTOMATIC);
+
+  windowStart1 = millis();
+  windowStart2 = millis();
+  lastFilterUpdate = millis();
+  long update_timer = millis();
+
+  while(!(digitalRead(button1_pin) == LOW || digitalRead(button2_pin) == LOW || digitalRead(button3_pin) == LOW )){
+    readAndFilterTemps();
+    // ===== Apply heating bias =====
+    sp1_eff = setpoint1;
+    sp2_eff = setpoint2;
+
+    if (temp1_filt < setpoint1)
+      sp1_eff = setpoint1 - heatBias;
+
+    if (temp2_filt < setpoint2)
+      sp2_eff = setpoint2 - heatBias;
+
+    pid1.Compute();
+    pid2.Compute();
+    driveSSR(SSR1_PIN, out1, windowStart1);
+    driveSSR(SSR2_PIN, out2, windowStart2);
+    //printStatus();
+    readSensor();
+    checkUnit();
+    updateDisplay();
+    checkAlarm();
+    delay(200);
+  }
+  soundConfirm();
+  start_pid = false;
+}
+
 
 void setup() {
   Serial.begin(115200);
@@ -762,6 +912,8 @@ void setup() {
   windowStart2 = millis();
   lastFilterUpdate = millis();
 
+  noTone(buzzerPin);
+
   if (!irSensor.begin()) {
       ESP_LOGE(TAG, "MLX90614 not found!");
   }
@@ -782,9 +934,15 @@ void setup() {
 }
 
 void loop() {
+  checkAlarm();
   checkUnit();
   handleInput();
   updateDisplay();
   checkStandby();
   readSensor();
+  soundEffect();
+
+  if(start_pid) startPID();
+
+  //Serial.println("sound on : " + String(soundOn));
 }

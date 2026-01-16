@@ -1,9 +1,13 @@
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
-#include <MAX6675.h>
 #include <EEPROM.h>
 #include <esp_log.h> 
+#include <SPI.h>
+#include "Adafruit_MAX31855.h"
+#include <PID_v1.h>
+#include <Adafruit_MLX90614.h>
+
 
 static const char *TAG = "MAIN";
 
@@ -14,19 +18,74 @@ static const char *TAG = "MAIN";
 
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
-const int dataPin   = 12;
-const int clockPin  = 14;
-const int selectPin = 18;
-MAX6675 thermoCouple(selectPin, dataPin, clockPin);
+// ===== IR temperature (GY-906 / MLX90614) =====
+Adafruit_MLX90614 irSensor = Adafruit_MLX90614();
+
+// ===== MAX31855 =====
+#define MAXDO   12
+#define MAXCLK  14
+#define MAXCS1  18
+#define MAXCS2  19
+
+// ===== Solid State Pins =====
+
+#define heaterRelayPin = 2;
+#define heaterRelayPin2 = 15;
+#define heaterRelayPin3 = 13;
+
+
+// // Create two thermocouple objects
+// Adafruit_MAX31855 thermocouple1(MAXCLK, MAXCS1, MAXDO);
+// Adafruit_MAX31855 thermocouple2(MAXCLK, MAXCS2, MAXDO);
+// ===== SSR =====
+#define SSR1_PIN  13
+#define SSR2_PIN  4
+
+// ===== Objects =====
+Adafruit_MAX31855 tc1(MAXCLK, MAXCS1, MAXDO);
+Adafruit_MAX31855 tc2(MAXCLK, MAXCS2, MAXDO);
+
+// ===== PID vars =====
+double temp1_raw, temp2_raw;
+double temp1_filt = 25, temp2_filt = 25;
+double out1, out2;
+
+// User setpoints (serial adjustable)
+double setpoint1 = 100.0;
+double setpoint2 = 100.0;
+
+// Effective setpoints (USED by PID)
+double sp1_eff = 100.0;
+double sp2_eff = 100.0;
+
+// ===== VERY SLOW PID =====
+double Kp = 3;
+double Ki = 0.1;
+double Kd = 0.0;
+
+PID pid1(&temp1_filt, &out1, &sp1_eff, Kp, Ki, Kd, DIRECT);
+PID pid2(&temp2_filt, &out2, &sp2_eff, Kp, Ki, Kd, DIRECT);
+
+// ===== Time proportional SSR =====
+const unsigned long windowSize = 2000;
+unsigned long windowStart1, windowStart2;
+
+// ===== Sensor delay model =====
+const double tau = 2.0;
+unsigned long lastFilterUpdate = 0;
+
+// ===== Heating bias =====
+const double heatBias = 25.0; // °C
+
+// ===== Serial =====
+char cmd[24];
+uint8_t idx = 0;
+
 
 const int button1_pin = 25; // Menu up / Back (hold)
 const int button2_pin = 26; // Menu down
 const int button3_pin = 33; // Select
 const int encoderPin = 32;  // Analog input for rotary encoder simulation (placeholder)
-
-const int heaterRelayPin = 2;
-const int heaterRelayPin2 = 15;
-const int heaterRelayPin3 = 13;
 
 const int buzzerPin = 27;  
 int adcValue = 0;
@@ -36,6 +95,9 @@ bool relayState3;
 
 unsigned long lastInteractionTime = 0;
 const unsigned long standbyTimeout = 10000;
+
+float targetTemp1 = 0;
+float targetTemp2 = 0;
 
 float currentTemp1 = 0;
 float currentTemp2 = 0;
@@ -72,6 +134,9 @@ float startTemps[] = {0, 260, 287, 315, 343, 371, 398, 426};
 float customStartTemp = 0;
 float maxTempLock = 537;
 int idleTimeoutOption = 0; // 0=15m, 1=30m, 2=60m, 3=Always On
+int idle_timeout_arr[3] = {10, 15, 30};
+int idle_timeout = 10;
+bool idle_always = false;
 bool lightOn = false;
 bool soundOn = true;
 int irAlarm1 = 0;
@@ -140,7 +205,17 @@ void selectMenuOption() {
       break;
 
     case MENU_IDLE_OFF:
-      idleTimeoutOption = subMenuIndex % 4;
+      idleTimeoutOption = subMenuIndex;
+      switch (subMenuIndex) {
+        case 0: // 10min
+          break;
+        case 1: // 15min
+          break;
+        case 2: // 30min
+          break;
+        case 3: // always on
+          break;
+      }
       break;
 
     case MENU_IR_ALARM:
@@ -169,15 +244,15 @@ void selectMenuOption() {
       switch (subMenuIndex) {
         case 0: // Relay
           relayState = !relayState;
-          digitalWrite(heaterRelayPin, relayState);
+          digitalWrite(SSR1_PIN, relayState);
           break;
         case 1: // Relay 2
           relayState2 = !relayState2;
-          digitalWrite(heaterRelayPin2, relayState2);
+          digitalWrite(SSR2_PIN, relayState2);
           break;
         case 2: // Relay 3
           relayState3 = !relayState3;
-          digitalWrite(heaterRelayPin3, relayState3);
+          // digitalWrite(heaterRelayPin3, relayState3);
           break;
       }
       break;
@@ -214,11 +289,19 @@ void handleInput() {
           lastButtonPress = millis();
           return;
         }
+        else if (currentState == MENU_MAIN) {
+          currentState = MENU_STANDBY;
+          subMenuIndex = 0;
+          lastInteractionTime = millis();
+          lastButtonPress = millis();
+          return;
+        }
       }
     }
     // Short press behavior
-    if (currentState == MENU_MAIN) {
+    if (currentState == MENU_MAIN) {  // Main menu 8 option
       menuIndex = (menuIndex - 1 + 8) % 8;
+
     } else if(currentState == MENU_MANUAL_TEST) {
       subMenuIndex = (subMenuIndex-1+4)%4;
     }
@@ -233,6 +316,10 @@ void handleInput() {
     }
     else if(currentState == MENU_UNIT) {
       subMenuIndex = (subMenuIndex-1+2)%2;
+    }
+    else if(currentState == MENU_IDLE_OFF) { 
+      subMenuIndex = (subMenuIndex-1+2)%5;
+      idleTimeoutOption = subMenuIndex;
     }
     lastInteractionTime = millis();
     lastButtonPress = millis();
@@ -256,6 +343,10 @@ void handleInput() {
     else if(currentState == MENU_UNIT) {
       subMenuIndex = (subMenuIndex+1)%2;
     }
+    else if(currentState == MENU_IDLE_OFF) { 
+      subMenuIndex = (subMenuIndex+1)%5;
+      idleTimeoutOption = subMenuIndex;
+    }
     lastInteractionTime = millis();
     lastButtonPress = millis();
   }
@@ -274,6 +365,52 @@ void handleInput() {
       //menu unit
       else if(menuIndex == 5){
         currentState = MENU_UNIT;
+        return;
+      }
+    }
+
+    // idle off
+    if(currentState == MENU_IDLE_OFF){
+      if(subMenuIndex == 0){
+        idle_timeout = idle_timeout_arr[0];
+        Serial.println("set idle :" + String(idle_timeout));
+        display.setCursor(18, 48);
+        display.println("Set Idle :" + String(idle_timeout));
+        display.display();
+        delay(1000);
+        return;
+      }
+      else if(subMenuIndex == 1){
+        idle_timeout = idle_timeout_arr[1];
+        Serial.println("set idle :" + String(idle_timeout));
+        display.setCursor(18, 48);
+        display.println("Set Idle :" + String(idle_timeout));
+        display.display();
+        delay(1000);
+        return;
+      }
+      else if(subMenuIndex == 2){
+        idle_timeout = idle_timeout_arr[2];
+        Serial.println("set idle :" + String(idle_timeout));
+        display.setCursor(18, 48);
+        display.println("Set Idle :" + String(idle_timeout));
+        display.display();
+        delay(1000);
+        return;
+      }
+      else if(subMenuIndex == 3){
+        idle_always = !idle_always;
+        delay(200);
+        Serial.println("set non idle");
+        display.setCursor(18, 48);
+        display.println("Set Non Idle");
+        display.display();
+        delay(1000);
+        return;
+      }
+      else if(subMenuIndex == 4){
+        currentState = MENU_MAIN;
+        Serial.println("confirm idle");
         return;
       }
     }
@@ -337,6 +474,12 @@ void handleInput() {
   }
 }
 
+double round1(double x)
+{
+    return round(x * 10.0) / 10;
+}
+
+
 void updateDisplay() {
   display.clearDisplay();
   display.setTextSize(1);
@@ -375,38 +518,38 @@ void updateDisplay() {
       display.setCursor(15, 5);
       display.print("Coil1");
       display.setCursor(15, 18);
-      display.print(currentTemp1);
+      display.print(round1(targetTemp1),1);
       display.print(tempUnitIsCelsius ? "C" : "F");
 
       display.setCursor(54, 5);
       display.print("Coil2");
       display.setCursor(54, 18);
-      display.print(currentTemp2);
+      display.print(round1(targetTemp2),1);
       display.print(tempUnitIsCelsius ? "C" : "F");
 
       display.setCursor(92, 5);
       display.print("Coil3");
       display.setCursor(92, 18);
-      display.print(currentTemp3);
-      display.print(tempUnitIsCelsius ? "C" : "F");
+      display.print(" ---");
+      // display.print(tempUnitIsCelsius ? "C" : "F");
 
       // Bottom row labels
       display.setCursor(18, 38);
-      display.print("IR1");
+      display.print("Temp1");
       display.setCursor(15, 50);
-      display.print(irTemp1);
+      display.print(round1(currentTemp1),1);
       display.print(tempUnitIsCelsius ? "C" : "F");
 
       display.setCursor(57, 38);
-      display.print("IR2");
+      display.print("Temp2");
       display.setCursor(54, 50);
-      display.print(irTemp2);
+      display.print(round1(currentTemp2),1);
       display.print(tempUnitIsCelsius ? "C" : "F");
 
       display.setCursor(92, 38);
-      display.print("KCple");
+      display.print("IR1");
       display.setCursor(92, 50);
-      display.print(thermoTemp);
+      display.print(round1(irTemp1),1);
       display.print(tempUnitIsCelsius ? "C" : "F");
 
       display.display();
@@ -452,11 +595,11 @@ void updateDisplay() {
       display.print(subMenuIndex == 2 ? "> Confirm: " : "  Confirm: ");
       break;
     case MENU_IDLE_OFF:
-      display.println(idleTimeoutOption == 0 ? "> 15 Min" : "  15 Min");
-      display.println(idleTimeoutOption == 1 ? "> 30 Min" : "  30 Min");
-      display.println(idleTimeoutOption == 2 ? "> 60 Min" : "  60 Min");
-      display.println(idleTimeoutOption == 3 ? "> Always On" : "  Always On");
-      
+      display.println(idleTimeoutOption == 0 ? "> 10 Min" : "  10 Min");
+      display.println(idleTimeoutOption == 1 ? "> 15 Min" : "  15 Min");
+      display.println(idleTimeoutOption == 2 ? "> 30 Min" : "  30 Min");
+      display.println(idleTimeoutOption == 3 ? "> Always " +String(idle_always) : "  Always " +String(idle_always));
+      display.println(idleTimeoutOption == 4 ? "> Confirm" : "  Confirm");
       break;
     case MENU_IR_ALARM:
       lastInteractionTime = millis();
@@ -522,18 +665,106 @@ void checkStandby() {
   }
 }
 
+// ===== Functions =====
+
+void readAndFilterTemps() {
+  unsigned long now = millis();
+  double dt = (now - lastFilterUpdate) / 1000.0;
+  lastFilterUpdate = now;
+
+  temp1_raw = tc1.readCelsius();
+  temp2_raw = tc2.readCelsius();
+
+  if (!isnan(temp1_raw))
+    temp1_filt += (temp1_raw - temp1_filt) * (dt / tau);
+
+  if (!isnan(temp2_raw))
+    temp2_filt += (temp2_raw - temp2_filt) * (dt / tau);
+}
+
+void driveSSR(int pin, double output, unsigned long &windowStart) {
+  unsigned long now = millis();
+  if (now - windowStart >= windowSize)
+    windowStart += windowSize;
+
+  digitalWrite(pin, (output > (now - windowStart)) ? HIGH : LOW);
+}
+
+void printStatus() {
+  Serial.println("---- STATUS ----");
+  Serial.print("Raw1: "); Serial.print(temp1_raw);
+  Serial.print("  Filt1: "); Serial.print(temp1_filt);
+  Serial.print("  SP1: "); Serial.print(setpoint1);
+  Serial.print("  Eff1: "); Serial.println(sp1_eff);
+
+  Serial.print("Raw2: "); Serial.print(temp2_raw);
+  Serial.print("  Filt2: "); Serial.print(temp2_filt);
+  Serial.print("  SP2: "); Serial.print(setpoint2);
+  Serial.print("  Eff2: "); Serial.println(sp2_eff);
+}
+
+void readSensor()
+{
+    unsigned long now = millis();
+    static unsigned long lastRead = 0;
+
+    if (now - lastRead < 100) return;
+    lastRead = now;
+
+    // ================= MAX31855 =================
+    double t1 = tc1.readCelsius();
+    delay(100);
+    double t2 = tc2.readCelsius();
+
+    if (isnan(t1)) t1 = temp1_raw;
+    if (isnan(t2)) t2 = temp2_raw;
+
+    temp1_raw = t1;
+    temp2_raw = t2;
+
+    currentTemp1 = temp1_raw;
+    currentTemp2 = temp2_raw;
+
+    // ================= IR (GY-906) =================
+    double irObj = irSensor.readObjectTempC();
+    // double irAmb = irSensor.readAmbientTempC();
+
+    if (!isnan(irObj)) irTemp1 = irObj;
+    // if (!isnan(irAmb)) irTemp2 = irAmb;
+}
+
+
 void setup() {
   Serial.begin(115200);
   SPI.begin();
 
   esp_log_level_set("*", ESP_LOG_INFO);
 
-  pinMode(heaterRelayPin, OUTPUT);
-  digitalWrite(heaterRelayPin, LOW);
-  pinMode(heaterRelayPin2, OUTPUT);
-  digitalWrite(heaterRelayPin2, LOW);
-  pinMode(heaterRelayPin3, OUTPUT);
-  digitalWrite(heaterRelayPin3, LOW);
+  // pinMode(heaterRelayPin, OUTPUT);
+  // digitalWrite(heaterRelayPin, LOW);
+  // pinMode(heaterRelayPin2, OUTPUT);
+  // digitalWrite(heaterRelayPin2, LOW);
+  // pinMode(heaterRelayPin3, OUTPUT);
+  // digitalWrite(heaterRelayPin3, LOW);
+
+  pinMode(SSR1_PIN, OUTPUT);
+  pinMode(SSR2_PIN, OUTPUT);
+
+  tc1.begin();
+  tc2.begin();
+
+  pid1.SetOutputLimits(0, windowSize);
+  pid2.SetOutputLimits(0, windowSize);
+  pid1.SetMode(AUTOMATIC);
+  pid2.SetMode(AUTOMATIC);
+
+  windowStart1 = millis();
+  windowStart2 = millis();
+  lastFilterUpdate = millis();
+
+  if (!irSensor.begin()) {
+      ESP_LOGE(TAG, "MLX90614 not found!");
+  }
 
   if (!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
     Serial.println(F("SSD1306 allocation failed"));
@@ -555,4 +786,5 @@ void loop() {
   handleInput();
   updateDisplay();
   checkStandby();
+  readSensor();
 }
