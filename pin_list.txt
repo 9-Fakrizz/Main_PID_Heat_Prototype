@@ -17,15 +17,15 @@
 * **GPIO 27** → buzzer
 * **GPIO 14** → SCK 
 * **GPIO 12** → SO **(upload issue)
-* **GPIO 13** → relay3
+* **GPIO 13** → relay3 (use for relay 1)
 * **GPIO 22** → SCL
 * **GPIO 21** → SDA
-* **GPIO 19** → CS1 (thermocouple1)
-* **GPIO 18** → CS2
-* **GPIO 5** → CS3
+* **GPIO 19** → CS1 (thermocouple2)
+* **GPIO 18** → CS2 (Thermocouple1)
+* **GPIO 5** → CS3 (not use)
 * **GPIO 17** → PT1
 * **GPIO 15** → PT2
-* **GPIO 4** → CS4
+* **GPIO 4** → CS4 (use for relay 2)
 * **GPIO 2** → relay1 **(upload issue)
 * **GPIO 15** → relay2 **(upload issue)
 
@@ -37,10 +37,10 @@
 * OLED I2C 1 Unit
 * Button 3 Unit
 * Potentiometer (Knob) 1 Unit
-* Thermocouple (MAX6675) 1 Unit
-* IR Temperature I2C 2 Unit
+* Thermocouple (MAX31855) 2 Unit
+* IR Temperature I2C 1 Unit
 * Buzzer 1 Unit
-* Raw Analog for Heat coil 1 Unit
+* Raw Analog for Heat coil 2 Unit
 
 # Critical ESP32 Boot Pins
 
