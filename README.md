@@ -16,6 +16,140 @@ The project is designed for systems that heat up quickly and cool down slowly, w
 * OLED display (SSD1306) for UI and status.
 * Serial interface for setpoint adjustment.
 * Buzzer feedback for button, confirm, and alarm events.
+---
+
+## How to Clone the Repository
+
+Clone the repository using Git:
+
+```bash
+git clone https://github.com/9-Fakrizz/Main_PID_Heat_Prototype.git
+```
+
+Change into the project directory:
+
+```bash
+cd Main_PID_Heat_Prototype
+```
+
+---
+
+## How to Use This Code (PlatformIO)
+
+### 1. Install PlatformIO
+
+Install **PlatformIO** using one of the following methods:
+
+* VS Code extension (recommended)
+* PlatformIO Core (CLI)
+
+Verify installation:
+
+```bash
+pio --version
+```
+
+---
+
+### 2. Open the Project
+
+#### Using VS Code
+
+1. Open VS Code
+2. Open the project folder:
+
+   ```
+   Main_PID_Heat_Prototype
+   ```
+3. PlatformIO will automatically detect the project
+
+#### Using CLI
+
+```bash
+cd Main_PID_Heat_Prototype
+```
+
+---
+
+### 3. Install Dependencies
+
+All required libraries are defined in `platformio.ini`.
+
+PlatformIO will automatically install:
+
+* Adafruit MAX31855
+* PID_v1
+* Adafruit SSD1306
+* Adafruit GFX
+* Adafruit MLX90614 (if enabled)
+
+If dependencies do not install automatically:
+
+```bash
+pio run
+```
+
+---
+
+### 4. Hardware Configuration
+
+Before building, verify the following:
+
+* Correct ESP32 board is selected in `platformio.ini`
+* GPIO pin assignments match your wiring:
+
+  * SPI pins for MAX31855
+  * SSR control pins
+  * I2C pins for OLED and IR sensor
+  * Buzzer pin
+
+Adjust pin definitions in the source code if needed.
+
+---
+
+### 5. Build and Upload
+
+#### Build only
+
+```bash
+pio run
+```
+
+#### Upload firmware
+
+```bash
+pio run --target upload
+```
+
+#### Upload and monitor
+
+```bash
+pio run --target upload --target monitor
+```
+
+Default monitor baud rate is defined in `platformio.ini` (typically 115200).
+
+---
+
+### 6. Runtime Control
+
+Use the Serial Monitor to adjust setpoints:
+
+```
+T1=120
+T2=90
+STATUS
+```
+
+Changes take effect immediately during runtime.
+
+---
+
+## Notes for PlatformIO Users
+
+* Do not open the project as a single `.ino` file
+* Use PlatformIO’s build system and dependency manager
+* Library versions are locked by `platformio.ini` to ensure reproducible builds
 
 ---
 
@@ -32,7 +166,6 @@ The project is designed for systems that heat up quickly and cool down slowly, w
 * GY-906 (MLX90614) IR temperature sensor
 * Piezo buzzer
 * Push buttons / rotary encoder (optional UI)
-
 ---
 
 ## Build Instructions
